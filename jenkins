@@ -1,0 +1,78 @@
+pipeline {
+  agent any
+  tools {
+    jdk 'jdk-17'
+    nodejs 'Node16'
+  }
+
+  environment {
+    SCANNER_HOME = tool 'sonar-scanner'
+  }
+
+  stages {
+    stage('Clean workspace') {
+      steps { cleanWs() }
+    }
+
+    stage('Checkout') {
+      steps { git branch: 'main', url: 'https://github.com/your-user/bingo-ci-cd.git' }
+    }
+
+    stage('SonarQube Analysis') {
+      steps {
+        withSonarQubeEnv('sonar-server') {
+          sh "${SCANNER_HOME}/bin/sonar-scanner -Dsonar.projectKey=Bingo"
+        }
+      }
+    }
+
+    stage('Quality Gate') {
+      steps {
+        waitForQualityGate(abortPipeline: false, credentialsId: 'sonar-token')
+      }
+    }
+
+    stage('Install Dependencies') {
+      steps {
+        sh 'npm install'
+      }
+    }
+
+    stage('OWASP Dependency-Check') {
+      steps {
+        dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', 
+                         odcInstallation: 'dependency-check', 
+                         dependencyCheckPublisherPattern: '**/dependency-check-report.xml'
+      }
+    }
+
+    stage('TRIVY FS SCAN') {
+      steps {
+        sh 'trivy fs . > trivyfs.txt'
+      }
+    }
+
+    stage('Docker Build & Push') {
+      steps {
+        script {
+          withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+            sh 'docker build -t yourdockerhub/bingo:latest .'
+            sh 'docker push yourdockerhub/bingo:latest'
+          }
+        }
+      }
+    }
+
+    stage('TRIVY Image Scan') {
+      steps {
+        sh 'trivy image yourdockerhub/bingo:latest > trivyimage.txt'
+      }
+    }
+
+    stage('Deploy Container') {
+      steps {
+        sh 'docker run -d --name bingo -p 3000:3000 yourdockerhub/bingo:latest'
+      }
+    }
+  }
+}
